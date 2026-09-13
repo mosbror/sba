@@ -1,0 +1,64 @@
+FROM php:8.4-fpm-bookworm AS vendor
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        git \
+        unzip \
+        libzip-dev \
+        $PHPIZE_DEPS \
+        default-mysql-client \
+    && pecl install redis \
+    && docker-php-ext-enable redis \
+    && docker-php-ext-install pdo_mysql zip opcache \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
+
+WORKDIR /var/www/html
+
+COPY backend/composer.json backend/composer.lock ./
+RUN composer install \
+    --no-dev \
+    --prefer-dist \
+    --optimize-autoloader \
+    --no-interaction \
+    --no-scripts
+
+COPY backend/ ./
+RUN composer dump-autoload --optimize --no-dev \
+    && php artisan package:discover --ansi
+
+FROM php:8.4-fpm-bookworm AS runtime
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        curl \
+        nginx \
+        libzip-dev \
+        $PHPIZE_DEPS \
+        default-mysql-client \
+    && pecl install redis \
+    && docker-php-ext-enable redis \
+    && docker-php-ext-install pdo_mysql zip opcache \
+    && apt-get purge -y --auto-remove $PHPIZE_DEPS \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /var/www/html
+
+COPY --from=vendor --chown=www-data:www-data /var/www/html /var/www/html
+COPY docker/backend/nginx.prod.conf /etc/nginx/sites-available/default
+COPY docker/backend/php.prod.ini /usr/local/etc/php/conf.d/production.ini
+COPY docker/backend/entrypoint.prod.sh /usr/local/bin/sba-backend-entrypoint
+
+RUN chmod +x /usr/local/bin/sba-backend-entrypoint \
+    && mkdir -p /var/run/php /var/lib/nginx/body \
+    && chown -R www-data:www-data /var/www/html/storage /var/www/html/bootstrap/cache /var/lib/nginx \
+    && rm -f /etc/nginx/sites-enabled/default \
+    && ln -s /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default
+
+EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=20s \
+    CMD curl -fsS http://127.0.0.1:8080/api/health >/dev/null || exit 1
+
+ENTRYPOINT ["sba-backend-entrypoint"]
