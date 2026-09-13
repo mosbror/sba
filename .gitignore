@@ -65,3 +65,6 @@ Thumbs.db
 .zed/
 .cursor/
 .codex/
+
+*.pdf
+*.xlsx
